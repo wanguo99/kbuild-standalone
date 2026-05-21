@@ -614,7 +614,8 @@ quiet_cmd_ld_bin = LD [BIN] $@
 
 # For multi-part executables (e.g., bin-y += myapp; myapp-y := main.o utils.o)
 # Depend on libraries built in the same directory (static libs only)
-$(multi-bin-y): %: $(real-bin-y) $(lib-target) $(so-target) FORCE
+# Also depend on libraries from other directories via LIBS_xxx variable
+$(multi-bin-y): %: $(real-bin-y) $(lib-target) $(so-target) $$(LIBS_$$(@F)) FORCE
 	$(call if_changed,ld_bin)
 
 # For single-file executables (e.g., bin-y += myapp from myapp.c)

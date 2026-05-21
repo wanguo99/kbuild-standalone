@@ -29,3 +29,6 @@ test_shared-y := test_shared.o
 
 # 链接共享库
 LDLIBS_test_shared := -L$(LIB_DIR) -lshared -lm
+
+# 声明对共享库的依赖
+LIBS_test_shared := $(LIB_DIR)/libshared.so

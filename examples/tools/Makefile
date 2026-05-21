@@ -15,3 +15,6 @@ ccflags-y := -I$(srctree)/examples/lib/include
 
 # 链接库
 LDLIBS_test_app := -L$(LIB_DIR) -lexample -lm
+
+# 声明对其他目录库的依赖
+LIBS_test_app := $(LIB_DIR)/libexample.a
