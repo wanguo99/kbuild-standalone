@@ -1,0 +1,23 @@
+# Build outputs
+*.o
+*.a
+*.so
+*.ko
+*.mod
+*.mod.c
+.*.cmd
+.*.d
+.tmp_*
+modules.order
+Module.symvers
+
+# Output directories
+/bin/
+/lib/
+/ko/
+
+# Generated files
+/include/generated/
+
+# Host tools
+/scripts/basic/fixdep
