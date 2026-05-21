@@ -10,3 +10,4 @@ obj-y += tools/
 # Ensure tools is built after lib (for parallel builds)
 # Note: Use directory names without trailing slash for dependencies
 tools: lib
+shared: lib

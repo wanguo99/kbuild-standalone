@@ -3,6 +3,9 @@
 # Building
 # ==========================================================================
 
+# Delete target on error to avoid corrupted partial files
+.DELETE_ON_ERROR:
+
 # Set default srctree if not already set
 srctree ?= .
 objtree ?= .
