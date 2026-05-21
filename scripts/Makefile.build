@@ -5,7 +5,15 @@
 
 # Set default srctree if not already set
 srctree ?= .
+objtree ?= .
 
+# Set default output directories
+BIN_DIR ?= $(objtree)/bin
+LIB_DIR ?= $(objtree)/lib
+KO_DIR  ?= $(objtree)/ko
+
+# Remove trailing slash from obj to avoid double slashes in paths
+override obj := $(patsubst %/,%,$(obj))
 src := $(obj)
 
 PHONY := $(obj)/
@@ -109,10 +117,11 @@ real-lib-y := $(call real-search, $(lib-y-with-suffix), .o, -objs -y)
 # bin-y: executable programs (e.g., bin-y += myapp; myapp-y := main.o utils.o)
 # so-y: shared libraries (e.g., so-y += mylib; mylib-y := api.o impl.o)
 multi-bin-y := $(call multi-search, $(bin-y), , -objs -y)
-multi-so-y := $(call multi-search, $(so-y), .so, -objs -y)
+# For so-y, don't add .so suffix in multi-search since items are just names like "shared"
+multi-so-y := $(call multi-search, $(so-y), , -objs -y)
 
 real-bin-y := $(call real-search, $(bin-y), , -objs -y)
-real-so-y := $(call real-search, $(so-y), .so, -objs -y)
+real-so-y := $(call real-search, $(so-y), , -objs -y)
 
 always-y += $(always-m)
 
@@ -145,7 +154,12 @@ real-bin-y	:= $(addprefix $(obj)/, $(real-bin-y))
 real-so-y	:= $(addprefix $(obj)/, $(real-so-y))
 bin-y		:= $(addprefix $(obj)/, $(bin-y))
 so-y		:= $(addprefix $(obj)/, $(so-y))
+# Add obj prefix without introducing double slashes
+ifneq ($(obj),.)
 subdir-ym	:= $(addprefix $(obj)/, $(subdir-ym))
+else
+subdir-ym	:= $(subdir-ym)
+endif
 endif
 
 ifndef obj
@@ -551,14 +565,15 @@ quiet_cmd_ld_so = LD [SO] $@
       cmd_ld_so = $(CC) -shared -o $@ $(real-prereqs) \
                   $(KBUILD_LDFLAGS) $(LDFLAGS_$(@F)) $(LDLIBS_$(@F))
 
-# For multi-part shared libraries (e.g., so-y += mylib.so; mylib.so-y := a.o b.o)
+# For multi-part shared libraries (e.g., so-y += mylib; mylib-y := a.o b.o)
+.SECONDEXPANSION:
 $(multi-so-y): KBUILD_CFLAGS += -fPIC
-$(multi-so-y): $(obj)/%.so: $(addprefix $(obj)/, $(call suffix-search, %, .so, -objs -y)) FORCE
+$(multi-so-y): %: $$(addprefix $$(obj)/, $$(call suffix-search, $$(notdir %), , -objs -y)) FORCE
 	$(call if_changed,ld_so)
 
-# For single-file shared libraries (e.g., so-y += mylib.so from mylib.c)
+# For single-file shared libraries (e.g., so-y += mylib from mylib.c)
 $(filter-out $(multi-so-y), $(so-y)): KBUILD_CFLAGS += -fPIC
-$(filter-out $(multi-so-y), $(so-y)): $(obj)/%.so: $(obj)/%.o FORCE
+$(filter-out $(multi-so-y), $(so-y)): $(obj)/%: $(obj)/%.o FORCE
 	$(call if_changed,ld_so)
 
 # Copy .so files to LIB_DIR
@@ -575,17 +590,19 @@ quiet_cmd_install_so = INSTALL $@
 
 # Get the base names for pattern matching
 multi-so-names := $(notdir $(multi-so-y))
+multi-so-names-normalized := $(addsuffix .so, $(basename $(multi-so-names)))
 
-# Install multi-part shared libraries
-$(addprefix $(LIB_DIR)/lib, $(multi-so-names)): $(LIB_DIR)/lib%: $(obj)/% FORCE
-	$(call if_changed,install_so)
+# Create explicit rules for each shared library installation
+define install-so-rule
+$(LIB_DIR)/lib$(1): $(obj)/$(basename $(1)) FORCE
+	$$(call if_changed,install_so)
+endef
 
-# Install single-file shared libraries
-$(addprefix $(LIB_DIR)/lib, $(filter-out $(multi-so-names), $(so-names))): $(LIB_DIR)/lib%: $(obj)/% FORCE
-	$(call if_changed,install_so)
+$(foreach so,$(multi-so-names-normalized),$(eval $(call install-so-rule,$(so))))
+$(foreach so,$(filter-out $(multi-so-names-normalized), $(so-y-normalized)),$(eval $(call install-so-rule,$(so))))
 
-# Add to targets
-targets-for-builtin += $(so-target)
+# Add to targets (but not to targets-for-builtin to avoid circular dependencies)
+targets += $(so-target)
 endif
 
 #
@@ -596,8 +613,8 @@ quiet_cmd_ld_bin = LD [BIN] $@
                    $(KBUILD_LDFLAGS) $(LDFLAGS_$(@F)) $(LDLIBS_$(@F))
 
 # For multi-part executables (e.g., bin-y += myapp; myapp-y := main.o utils.o)
-# Also depend on installed libraries in LIB_DIR
-$(multi-bin-y): %: $(real-bin-y) $(lib-target) FORCE
+# Depend on libraries built in the same directory (static libs only)
+$(multi-bin-y): %: $(real-bin-y) $(lib-target) $(so-target) FORCE
 	$(call if_changed,ld_bin)
 
 # For single-file executables (e.g., bin-y += myapp from myapp.c)
@@ -672,7 +689,7 @@ $(single-subdir-goals): $(single-subdirs)
 
 PHONY += $(subdir-ym)
 $(subdir-ym):
-	$(Q)$(MAKE) $(build)=$@ \
+	$(Q)$(MAKE) $(build)=$(patsubst %/,%,$@) \
 	need-builtin=$(if $(filter $@/built-in.a, $(subdir-builtin)),1) \
 	need-modorder=$(if $(filter $@/modules.order, $(subdir-modorder)),1) \
 	$(filter $@/%, $(single-subdir-goals))
@@ -716,7 +733,8 @@ endif
 
 $(obj)/: $(if $(KBUILD_BUILTIN), $(targets-for-builtin)) \
 	 $(if $(KBUILD_MODULES), $(targets-for-modules)) \
-	 $(targets-for-bin) $(targets-for-so) \
+	 $(so-target) $(targets-for-so) \
+	 $(targets-for-bin) \
 	 $(subdir-ym) $(always-y)
 	@:
 

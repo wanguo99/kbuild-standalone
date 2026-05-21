@@ -154,10 +154,18 @@ modkern_aflags = $(if $(part-of-module),				\
 			$(KBUILD_AFLAGS_MODULE) $(AFLAGS_MODULE),	\
 			$(KBUILD_AFLAGS_KERNEL) $(AFLAGS_KERNEL) $(modfile_flags))
 
+# For kernel modules, include kernel-specific flags
+# For userspace programs (lib-y, bin-y, so-y), use simpler flags
+ifeq ($(part-of-module),)
+# Userspace build: no kernel headers or module flags
+c_flags        = -Wp,-MMD,$(depfile) $(_c_flags)
+else
+# Kernel module build: include all kernel-specific flags
 c_flags        = -Wp,-MMD,$(depfile) $(NOSTDINC_FLAGS) $(LINUXINCLUDE)     \
 		 -include $(srctree)/include/linux/compiler_types.h       \
 		 $(_c_flags) $(modkern_cflags)                           \
 		 $(basename_flags) $(modname_flags)
+endif
 
 rust_flags     = $(_rust_flags) $(modkern_rustflags) @$(objtree)/include/generated/rustc_cfg
 
