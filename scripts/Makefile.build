@@ -3,6 +3,9 @@
 # Building
 # ==========================================================================
 
+# Set default srctree if not already set
+srctree ?= .
+
 src := $(obj)
 
 PHONY := $(obj)/
@@ -15,6 +18,8 @@ obj-y :=
 obj-m :=
 lib-y :=
 lib-m :=
+so-y :=
+bin-y :=
 always-y :=
 always-m :=
 targets :=
@@ -93,6 +98,22 @@ multi-obj-ym := $(multi-obj-y) $(multi-obj-m)
 real-obj-y := $(call real-search, $(obj-y), .o, -objs -y)
 real-obj-m := $(call real-search, $(obj-m), .o, -objs -y -m)
 
+# Expand lib-y for static libraries
+# lib-y: static library objects (e.g., lib-y += example; example-y := a.o b.o)
+# Note: lib-y items don't have .o suffix, so we add it for processing
+lib-y-with-suffix := $(addsuffix .o, $(lib-y))
+multi-lib-y := $(call multi-search, $(lib-y-with-suffix), .o, -objs -y)
+real-lib-y := $(call real-search, $(lib-y-with-suffix), .o, -objs -y)
+
+# Expand bin-y and so-y for executables and shared libraries
+# bin-y: executable programs (e.g., bin-y += myapp; myapp-y := main.o utils.o)
+# so-y: shared libraries (e.g., so-y += mylib; mylib-y := api.o impl.o)
+multi-bin-y := $(call multi-search, $(bin-y), , -objs -y)
+multi-so-y := $(call multi-search, $(so-y), .so, -objs -y)
+
+real-bin-y := $(call real-search, $(bin-y), , -objs -y)
+real-so-y := $(call real-search, $(so-y), .so, -objs -y)
+
 always-y += $(always-m)
 
 # hostprogs-always-y += foo
@@ -116,7 +137,14 @@ obj-m		:= $(addprefix $(obj)/, $(obj-m))
 lib-y		:= $(addprefix $(obj)/, $(lib-y))
 real-obj-y	:= $(addprefix $(obj)/, $(real-obj-y))
 real-obj-m	:= $(addprefix $(obj)/, $(real-obj-m))
+real-lib-y	:= $(addprefix $(obj)/, $(real-lib-y))
 multi-obj-m	:= $(addprefix $(obj)/, $(multi-obj-m))
+multi-bin-y	:= $(addprefix $(obj)/, $(multi-bin-y))
+multi-so-y	:= $(addprefix $(obj)/, $(multi-so-y))
+real-bin-y	:= $(addprefix $(obj)/, $(real-bin-y))
+real-so-y	:= $(addprefix $(obj)/, $(real-so-y))
+bin-y		:= $(addprefix $(obj)/, $(bin-y))
+so-y		:= $(addprefix $(obj)/, $(so-y))
 subdir-ym	:= $(addprefix $(obj)/, $(subdir-ym))
 endif
 
@@ -154,7 +182,12 @@ ifdef need-modorder
 targets-for-modules += $(obj)/modules.order
 endif
 
-targets += $(targets-for-builtin) $(targets-for-modules)
+# Targets for bin-y (executables) and so-y (shared libraries)
+# These are the local build targets (in obj directory)
+targets-for-bin := $(multi-bin-y)
+targets-for-so := $(multi-so-y) $(filter-out $(multi-so-y), $(so-y))
+
+targets += $(targets-for-builtin) $(targets-for-modules) $(targets-for-bin) $(targets-for-so)
 
 # Linus' kernel sanity checking tool
 ifeq ($(KBUILD_CHECKSRC),1)
@@ -431,6 +464,8 @@ $(obj)/%.o: $(obj)/%.S FORCE
 targets += $(filter-out $(subdir-builtin), $(real-obj-y))
 targets += $(filter-out $(subdir-modorder), $(real-obj-m))
 targets += $(lib-y) $(always-y)
+targets += $(real-lib-y) $(real-bin-y) $(real-so-y)
+targets += $(multi-bin-y) $(multi-so-y)
 
 # Linker scripts preprocessor (.lds.S -> .lds)
 # ---------------------------------------------------------------------------
@@ -484,9 +519,106 @@ $(obj)/modules.order: $(obj-m) FORCE
 #
 # Rule to compile a set of .o files into one .a file (with symbol table)
 #
+quiet_cmd_ar = AR      $@
+      cmd_ar = rm -f $@; $(AR) cDPrs $@ $(real-prereqs)
 
-$(obj)/lib.a: $(lib-y) FORCE
+$(obj)/lib.a: $(real-lib-y) FORCE
 	$(call if_changed,ar)
+
+# Copy lib.a to output directory with proper name
+# lib-y contains library names without lib prefix or .a suffix
+# e.g., lib-y += example produces lib/libexample.a
+ifneq ($(strip $(lib-y)),)
+# Generate library targets in LIB_DIR
+# Extract just the library name from lib-y (strip any path prefix)
+lib-names := $(notdir $(lib-y))
+lib-target := $(addprefix $(LIB_DIR)/lib, $(addsuffix .a, $(lib-names)))
+
+quiet_cmd_install_lib = INSTALL $@
+      cmd_install_lib = mkdir -p $(LIB_DIR); cp $< $@
+
+$(lib-target): $(obj)/lib.a FORCE
+	$(call if_changed,install_lib)
+
+# Add to targets-for-builtin so it gets built
+targets-for-builtin += $(lib-target)
+endif
+
+#
+# Rule to link .o files into shared library (.so)
+#
+quiet_cmd_ld_so = LD [SO] $@
+      cmd_ld_so = $(CC) -shared -o $@ $(real-prereqs) \
+                  $(KBUILD_LDFLAGS) $(LDFLAGS_$(@F)) $(LDLIBS_$(@F))
+
+# For multi-part shared libraries (e.g., so-y += mylib.so; mylib.so-y := a.o b.o)
+$(multi-so-y): KBUILD_CFLAGS += -fPIC
+$(multi-so-y): $(obj)/%.so: $(addprefix $(obj)/, $(call suffix-search, %, .so, -objs -y)) FORCE
+	$(call if_changed,ld_so)
+
+# For single-file shared libraries (e.g., so-y += mylib.so from mylib.c)
+$(filter-out $(multi-so-y), $(so-y)): KBUILD_CFLAGS += -fPIC
+$(filter-out $(multi-so-y), $(so-y)): $(obj)/%.so: $(obj)/%.o FORCE
+	$(call if_changed,ld_so)
+
+# Copy .so files to LIB_DIR
+# so-y can contain either "mylib" or "mylib.so"
+# Normalize to always have .so suffix for output
+ifneq ($(strip $(so-y)),)
+# Extract just the library names without path
+so-names := $(notdir $(so-y))
+so-y-normalized := $(addsuffix .so, $(basename $(so-names)))
+so-target := $(addprefix $(LIB_DIR)/lib, $(so-y-normalized))
+
+quiet_cmd_install_so = INSTALL $@
+      cmd_install_so = mkdir -p $(LIB_DIR); cp $< $@
+
+# Get the base names for pattern matching
+multi-so-names := $(notdir $(multi-so-y))
+
+# Install multi-part shared libraries
+$(addprefix $(LIB_DIR)/lib, $(multi-so-names)): $(LIB_DIR)/lib%: $(obj)/% FORCE
+	$(call if_changed,install_so)
+
+# Install single-file shared libraries
+$(addprefix $(LIB_DIR)/lib, $(filter-out $(multi-so-names), $(so-names))): $(LIB_DIR)/lib%: $(obj)/% FORCE
+	$(call if_changed,install_so)
+
+# Add to targets
+targets-for-builtin += $(so-target)
+endif
+
+#
+# Rule to link .o files into executable binary
+#
+quiet_cmd_ld_bin = LD [BIN] $@
+      cmd_ld_bin = $(CC) -o $@ $(real-prereqs) \
+                   $(KBUILD_LDFLAGS) $(LDFLAGS_$(@F)) $(LDLIBS_$(@F))
+
+# For multi-part executables (e.g., bin-y += myapp; myapp-y := main.o utils.o)
+# Also depend on installed libraries in LIB_DIR
+$(multi-bin-y): %: $(real-bin-y) $(lib-target) FORCE
+	$(call if_changed,ld_bin)
+
+# For single-file executables (e.g., bin-y += myapp from myapp.c)
+$(filter-out $(multi-bin-y), $(bin-y)): $(obj)/%: $(obj)/%.o FORCE
+	$(call if_changed,ld_bin)
+
+# Copy executables to BIN_DIR
+ifneq ($(strip $(bin-y)),)
+# Extract just the binary names without path
+bin-names := $(notdir $(bin-y))
+bin-target := $(addprefix $(BIN_DIR)/, $(bin-names))
+
+quiet_cmd_install_bin = INSTALL $@
+      cmd_install_bin = mkdir -p $(BIN_DIR); cp $< $@
+
+$(bin-target): $(BIN_DIR)/%: $(obj)/% FORCE
+	$(call if_changed,install_bin)
+
+# Add to targets
+targets-for-builtin += $(bin-target)
+endif
 
 quiet_cmd_ld_multi_m = LD [M]  $@
       cmd_ld_multi_m = $(LD) $(ld_flags) -r -o $@ @$< $(cmd_objtool)
@@ -560,15 +692,6 @@ ifneq ($(need-dtbslist)$(dtb-y)$(dtb-)$(filter %.dtb %.dtb.o %.dtbo.o,$(targets)
 include $(srctree)/scripts/Makefile.dtbs
 endif
 
-# Build
-# Needs to be after the include of Makefile.dtbs, which updates always-y
-# ---------------------------------------------------------------------------
-
-$(obj)/: $(if $(KBUILD_BUILTIN), $(targets-for-builtin)) \
-	 $(if $(KBUILD_MODULES), $(targets-for-modules)) \
-	 $(subdir-ym) $(always-y)
-	@:
-
 # Read all saved command lines and dependencies for the $(targets) we
 # may be building above, using $(if_changed{,_dep}). As an
 # optimization, we don't need to read them if the target does not
@@ -586,5 +709,15 @@ obj-dirs := $(strip $(filter-out $(existing-dirs), $(obj-dirs)))
 ifneq ($(obj-dirs),)
 $(shell mkdir -p $(obj-dirs))
 endif
+
+# Build
+# Needs to be after the include of Makefile.dtbs, which updates always-y
+# ---------------------------------------------------------------------------
+
+$(obj)/: $(if $(KBUILD_BUILTIN), $(targets-for-builtin)) \
+	 $(if $(KBUILD_MODULES), $(targets-for-modules)) \
+	 $(targets-for-bin) $(targets-for-so) \
+	 $(subdir-ym) $(always-y)
+	@:
 
 .PHONY: $(PHONY)

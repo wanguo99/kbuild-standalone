@@ -132,6 +132,12 @@ VPATH		:= $(srctree)
 
 export srctree objtree VPATH
 
+# Enable built-in and module support
+KBUILD_BUILTIN := 1
+KBUILD_MODULES := 1
+
+export KBUILD_BUILTIN KBUILD_MODULES
+
 # =============================================================================
 # 工具链配置
 # =============================================================================
