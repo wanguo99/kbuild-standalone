@@ -14,16 +14,16 @@ include $(kbuild-file)
 # Figure out what we need to build from the various variables
 # ==========================================================================
 
+# Process bin-y and so-y (add obj prefix like Makefile.lib does)
+bin-y := $(addprefix $(obj)/, $(bin-y))
+so-y := $(addprefix $(obj)/, $(so-y))
+
+# Compute subdir list
 subdir-ymn := $(sort $(subdir-y) $(subdir-m) $(subdir-) \
 		$(patsubst %/,%, $(filter %/, $(obj-y) $(obj-m) $(obj-))))
-
-# Add subdir path
-
 subdir-ymn	:= $(addprefix $(obj)/,$(subdir-ymn))
 
-# build a list of files to remove, usually relative to the current
-# directory
-
+# Build clean files list (bin-y and so-y already have obj prefix)
 __clean-files	:= \
 	$(clean-files) $(targets) $(hostprogs) $(userprogs) \
 	$(extra-y) $(extra-m) $(extra-) \
@@ -33,7 +33,8 @@ __clean-files	:= \
 
 __clean-files   := $(filter-out $(no-clean-files), $(__clean-files))
 
-__clean-files   := $(wildcard $(addprefix $(obj)/, $(__clean-files)))
+# Add obj prefix to files without it, then add bin-y and so-y (which already have prefix)
+__clean-files   := $(wildcard $(addprefix $(obj)/, $(__clean-files)) $(bin-y) $(so-y))
 
 # ==========================================================================
 
